@@ -385,7 +385,7 @@ auto s(std::chrono::milliseconds f5_duration) -> void
 
     auto executor = tf::Executor(3);
     // executor.make_observer<ExecutionObserver>();
-    std::cerr << "Starting " + tftop.name() + " with f5_duration=" + to_string(f5_duration);
+    std::cerr << "Starting " + tftop.name() + " with f5_duration=" + to_string(f5_duration) + "\n";
     auto fut = executor.run(tftop,[]{std::cerr << "finish\n";});
     fut.get();
 }
