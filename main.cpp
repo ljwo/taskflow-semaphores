@@ -141,7 +141,7 @@ auto s2() -> void
     auto fut = executor.run(tftop,[]{std::cerr << "finish\n";});
     fut.get();
 }
-}
+}  // namespace s2
 
 
 
@@ -253,11 +253,148 @@ auto s() -> void
     auto fut = executor.run(ftop,[]{std::cerr << "finish\n";});
     fut.get();
 }
+}  // namespace s6
+
+
+
+
+namespace time1
+{
+
+using Clock = std::chrono::high_resolution_clock;
+
+template<typename Duration>
+auto unit() -> std::string_view
+{
+    if constexpr (std::is_same_v<Duration, std::chrono::nanoseconds>)
+        return "ns";
+    else 
+    if constexpr (std::is_same_v<Duration, std::chrono::microseconds>)
+        return "us";
+    else 
+    if constexpr (std::is_same_v<Duration, std::chrono::milliseconds>)
+        return "ms";
+    else 
+    if constexpr (std::is_same_v<Duration, std::chrono::seconds>)
+        return "s";
+    else
+        return "unknown unit";
 }
 
+auto to_string(Clock::duration duration) -> std::string
+{
+    return std::to_string(duration.count()).append(unit<Clock::duration>());
+}
+
+auto makeWorkFlow(tf::Taskflow& tf, const std::string& name, std::chrono::milliseconds delay) -> auto
+{
+    auto t = tf.emplace([name, delay](tf::Runtime& rt){
+        auto start_time = Clock::now();
+        std::this_thread::sleep_for(delay);
+        auto end_time = Clock::now();
+        log(rt.worker().id(), name, "work done", "elapsed", to_string(end_time-start_time));
+        });
+    t.name(name);
+    return t;
+}
+
+auto makeInnerWorkFlow(tf::Taskflow& tf, const std::string& name) -> auto
+{
+    auto t1 = makeWorkFlow(tf, name + "_f1", 40ms);
+    auto t2 = makeWorkFlow(tf, name + "_f2", 20ms);
+    auto t3 = makeWorkFlow(tf, name + "_f3", 1ms);
+    t1.precede(t3);
+    t2.precede(t3);
+}
+
+auto makeTimedFlow(tf::Taskflow& f1, const std::string& name, Clock::time_point& start_time, std::chrono::milliseconds delay) -> auto
+{
+    auto f1a = f1.emplace([&start_time, name](tf::Runtime& rt){
+        start_time = Clock::now();
+        });
+
+    auto f1b = f1.emplace([name, delay](tf::Runtime& rt){
+        auto start_time = Clock::now();
+        std::this_thread::sleep_for(delay);
+        auto end_time = Clock::now();
+        log(rt.worker().id(), name, "work done", "elapsed", to_string(end_time-start_time));
+        });
+
+    auto f1c = f1.emplace([&start_time, name](tf::Runtime& rt){
+        auto end_time = Clock::now();
+        log(rt.worker().id(), name, "finished", "elapsed", to_string(end_time-start_time));
+        });
+
+    f1a.precede(f1b);
+    f1b.precede(f1c);
+    f1a.name(name + "_start_timed");
+    f1b.name(name + "_work");
+    f1c.name(name + "_finish_timed");
+    return f1a;
+}
+
+auto makeTimedFlowWithModule(
+    tf::Taskflow& f1, tf::Taskflow& sub, const std::string& name, Clock::time_point& start_time) -> auto
+{
+    auto f1a = f1.emplace([&start_time, name](tf::Runtime& rt){
+        start_time = Clock::now();
+        });
+
+    makeInnerWorkFlow(sub, "mod");
+    auto f1b = f1.composed_of(sub);
+
+    auto f1c = f1.emplace([&start_time, name](tf::Runtime& rt){
+        auto end_time = Clock::now();
+        log(rt.worker().id(), name, "finished", "elapsed", to_string(end_time-start_time));
+        });
+
+    f1a.precede(f1b);
+    f1b.precede(f1c);
+    f1a.name(name + "_start_timed");
+    f1b.name(name + "_work");
+    f1c.name(name + "_finish_timed");
+    return f1a;
+}
+
+
+auto s(std::chrono::milliseconds f5_duration) -> void 
+{
+
+    auto tftop = tf::Taskflow{};
+    tftop.name("tftop");
+
+    auto sub1 = tf::Taskflow{};
+    sub1.name("sub1");
+    auto start_time_f1 = Clock::time_point{};
+    makeTimedFlowWithModule(tftop, sub1, "f1", start_time_f1);
+    auto f2 = makeWorkFlow(tftop, "f2", 20ms);
+    auto f3 = makeWorkFlow(tftop, "f3", 15ms);
+    auto f4 = makeWorkFlow(tftop, "f4", 15ms);
+
+    auto start_time_f5 = Clock::time_point{};
+    auto f5 = makeTimedFlow(tftop, "f5", start_time_f5, f5_duration);
+
+    f2.precede(f3);
+    f2.precede(f4);
+    f3.precede(f5);
+
+    {
+        auto d = std::ofstream("dump-time1.dot");
+        tftop.dump(d);
+    }
+
+    auto executor = tf::Executor(3);
+    // executor.make_observer<ExecutionObserver>();
+    std::cerr << "Starting " + tftop.name() + " with f5_duration=" + to_string(f5_duration);
+    auto fut = executor.run(tftop,[]{std::cerr << "finish\n";});
+    fut.get();
+}
+}  // namespace time1
 
 auto main() -> int
 {
     // s2::s2();
-    s6::s();
+    // s6::s();
+    time1::s(5ms);
+    time1::s(500ms);
 }
